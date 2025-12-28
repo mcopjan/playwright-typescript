@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 //$env:USERNAME=""; $env:PASSWORD=""; npx playwright test --headed --project=chromium --ui
 
 test('Sign_Igel12_IPKG', async ({ page }) => {
+  test.setTimeout(360_000); // Set test timeout to 6 minutes
   const username = process.env.USERNAME!;
   const password = process.env.PASSWORD!;
   // LOGIN
@@ -17,27 +18,44 @@ test('Sign_Igel12_IPKG', async ({ page }) => {
   await expect(createBtn).toBeVisible();
   await createBtn.click();
   const filePath = 'C:/Users/marti/Downloads/controlupedgedx-2.17.7+7852.1.rc.1.zip'; //tbd will be configurable
-  const browseButton = page.getByRole('button', { name: 'Browse File' });
-  const fileChooserPromise = page.waitForEvent('filechooser');
-  await browseButton.click();
-  const fileChooser = await fileChooserPromise;
+
+  const uploadContainer = page.locator('div:has(input[type="file"][accept*="zip"])').nth(-1);
+  await expect(uploadContainer).toBeVisible({ timeout: 15_000 });
+
+  // Locate the Browse button
+  const browseButton = uploadContainer.getByRole('button', { name: 'Browse File' });
+
+  // Wait for the Browse button to be enabled
+  await expect(browseButton).toBeEnabled({ timeout: 10_000 });
+  await page.waitForTimeout(100);
+
+  // Use filechooser to properly simulate user selecting a file
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent('filechooser'), // listens for the native file chooser event
+    browseButton.click()               // triggers React initialization and opens the file chooser
+  ]);
+
+  // Set the file using the filechooser, which triggers all proper events
   await fileChooser.setFiles(filePath);
 
+  // Optionally wait for the actual upload POST to succeed
   await page.waitForResponse(response =>
-    response.request().method() === 'POST' &&
     response.url().includes('/upload/') &&
-    response.status() === 200
+    response.request().method() === 'POST' &&
+    response.status() === 200,
+    { timeout: 30_000 }
   );
 
-  await expect(page.locator('#root')).toContainText('Completed', {
-    timeout: 15000 // 15 seconds
-  });
+  // Wait for the "Completed" label to confirm upload finished
+  await expect(page.getByText('Completed')).toBeVisible({ timeout: 30_000 });
+
+
 
   const filePath2 = 'C:/Users/marti/Downloads/sipagent.tar.bz2';
 
   // 1️⃣ Set the file on the hidden input
-  const fileInput = page.locator('input.chakra-input[type="file"]');
-  await fileInput.setInputFiles(filePath2);
+  const fileInput2 = page.locator('input.chakra-input[type="file"]');
+  await fileInput2.setInputFiles(filePath2);
 
   // 2️⃣ Click the Upload button (wait for it to become enabled)
   const uploadButton = page.locator('div[role="presentation"] button', { hasText: 'Upload' });
@@ -62,11 +80,26 @@ test('Sign_Igel12_IPKG', async ({ page }) => {
   const path = await download.path();
   console.log('Downloaded file path:', path);
 
-  // Wait until the app enables the checkbox
-  const checkboxLabel = page.locator('label:has-text("I confirm that I have read, understood and agree to the Terms of Use.")');
-  await expect(checkboxLabel).toHaveAttribute('data-checked', { timeout: 120_000 });
+  const checkboxControl = page.locator('span.chakra-checkbox__control');
+
+  await expect(checkboxControl).not.toHaveAttribute('data-disabled', '', {
+    timeout: 120_000
+  });
+
+  await checkboxControl.click();
 
   await page.getByRole('button', { name: 'Build' }).click();
 
+  const downloadAppButton = page.getByRole('button', { name: 'Download App' });
+
+  await expect(downloadAppButton).toBeVisible({ timeout: 5 * 60 * 1000 });
+  const [appDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    downloadAppButton.click()
+  ]);
+
+  const savePath = 'C:/Users/marti/Downloads/' + appDownload.suggestedFilename();
+  await appDownload.saveAs(savePath);
+  console.log('App downloaded to:', savePath);
 
 });
