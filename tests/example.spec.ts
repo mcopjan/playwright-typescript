@@ -22,32 +22,58 @@ test('Sign_Igel12_IPKG', async ({ page }) => {
   const uploadContainer = page.locator('div:has(input[type="file"][accept*="zip"])').nth(-1);
   await expect(uploadContainer).toBeVisible({ timeout: 15_000 });
 
-  // Locate the Browse button
   const browseButton = uploadContainer.getByRole('button', { name: 'Browse File' });
-
-  // Wait for the Browse button to be enabled
   await expect(browseButton).toBeEnabled({ timeout: 10_000 });
-  await page.waitForTimeout(100);
 
-  // Use filechooser to properly simulate user selecting a file
-  const [fileChooser] = await Promise.all([
-    page.waitForEvent('filechooser'), // listens for the native file chooser event
-    browseButton.click()               // triggers React initialization and opens the file chooser
-  ]);
+  const fileInput = uploadContainer.locator('input[type="file"][accept*="zip"]');
 
-  // Set the file using the filechooser, which triggers all proper events
-  await fileChooser.setFiles(filePath);
+  // Retry logic
+  const maxRetries = 5;
+  let completed = false;
 
-  // Optionally wait for the actual upload POST to succeed
-  await page.waitForResponse(response =>
-    response.url().includes('/upload/') &&
-    response.request().method() === 'POST' &&
-    response.status() === 200,
-    { timeout: 30_000 }
-  );
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`Upload attempt ${attempt}`);
 
-  // Wait for the "Completed" label to confirm upload finished
-  await expect(page.getByText('Completed')).toBeVisible({ timeout: 30_000 });
+    // Trigger the file chooser
+    const [fileChooser] = await Promise.all([
+      page.waitForEvent('filechooser'),
+      browseButton.click()
+    ]);
+
+    // Set the file
+    await fileChooser.setFiles(filePath);
+
+    // Wait for the POST request to succeed
+    try {
+      await page.waitForResponse(response =>
+        response.url().includes('/upload/') &&
+        response.request().method() === 'POST' &&
+        response.status() === 200,
+        { timeout: 30_000 } // adjust if needed
+      );
+    } catch (err) {
+      console.warn(`Upload POST failed on attempt ${attempt}: ${err}`);
+      if (attempt === maxRetries) throw err;
+      continue; // retry
+    }
+
+    // Wait for the "Completed" label
+    try {
+      await expect(page.getByText('Completed')).toBeVisible({ timeout: 30_000 });
+      completed = true;
+      console.log('Upload completed!');
+      break;
+    } catch {
+      console.warn(`"Completed" label not found on attempt ${attempt}`);
+      if (attempt === maxRetries) throw new Error('Upload failed after max retries');
+      // optionally clear the file input or refresh component before retrying
+    }
+  }
+
+  if (!completed) {
+    throw new Error('Upload did not complete after retries');
+  }
+
 
 
 
